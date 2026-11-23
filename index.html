@@ -1,1 +1,302 @@
-const FIREBASE_DB_URL = "https://jomana-moon-default-rtdb.firebaseio.com";
+
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jomana & Moon - Ortak Oda</title>
+<style>
+*{box-sizing:border-box}
+body{
+  font-family:Arial,sans-serif;
+  margin:0;padding:16px;
+  background:#f4f5f7;color:#111;
+}
+.box{
+  max-width:540px;margin:auto;
+  background:white;padding:18px;
+  border-radius:14px;
+  box-shadow:0 2px 10px #0001;
+}
+h2{text-align:center}
+input,button{
+  padding:12px;border-radius:8px;
+  border:1px solid #ccc;font-size:15px;
+}
+button{
+  background:#1a73e8;color:white;
+  border:0;font-weight:bold;cursor:pointer;
+}
+.row{
+  display:flex;gap:8px;
+  margin:12px 0;flex-wrap:wrap;
+}
+.row input{flex:1;min-width:110px}
+.panel,.stage{
+  padding:13px;border-radius:9px;
+  margin:14px 0;background:#eef3fe;
+}
+.stage{background:#fff8e7;border:1px solid #f0d78c}
+#chat{
+  height:220px;overflow-y:auto;
+  border:1px solid #ddd;border-radius:8px;
+  padding:10px;background:#fafafa;
+}
+.msg{
+  padding:8px;margin:6px 0;
+  background:white;border:1px solid #eee;
+  border-radius:8px;overflow-wrap:anywhere;
+}
+#status{font-size:13px;color:#555;margin:10px 0}
+</style>
+</head>
+<body>
+
+<div class="box">
+<h2>Jomana & Moon 🌙</h2>
+<div id="status">Henüz bağlanmadın.</div>
+
+<div class="row">
+<input id="roomInput" placeholder="Oda kodu" value="oda123">
+<input id="nickInput" placeholder="Adın" value="Ben">
+<button onclick="connectRoom()">Bağlan</button>
+</div>
+
+<div class="panel">
+<strong>Karşıdaki kişinin hareketi:</strong>
+<div id="peerAction">Henüz hareket yok.</div>
+<div class="row">
+<input id="actionInput" placeholder="Ne yapıyorsun?">
+<button onclick="sendAction()">Gönder</button>
+</div>
+</div>
+
+<div class="stage">
+<strong>Ortak aktivite alanı:</strong>
+<div id="sharedActivity">Henüz aktivite yok.</div>
+<div class="row">
+<input id="activityInput" placeholder="Ortak alana bir şey ekle">
+<button onclick="interactActivity()">Ekle</button>
+</div>
+</div>
+
+<h3>💬 Sohbet</h3>
+<div id="chat"></div>
+<div class="row">
+<input id="msgInput" placeholder="Mesajını yaz..."
+onkeydown="if(event.key==='Enter')sendMsg()">
+<button onclick="sendMsg()">Gönder</button>
+</div>
+</div>
+
+<script>
+const FIREBASE_DB_URL =
+"https://jomana-moon-default-rtdb.firebaseio.com";
+
+let poller = null;
+let connected = false;
+let syncing = false;
+let seenMessages = new Set();
+
+function getRoomUrl(){
+  const room = document.getElementById("roomInput").value.trim();
+  return FIREBASE_DB_URL + "/rooms/" +
+    encodeURIComponent(room);
+}
+
+function getNick(){
+  return document.getElementById("nickInput").value.trim()
+    || "Kullanıcı";
+}
+
+function showStatus(message){
+  document.getElementById("status").textContent = message;
+}
+
+async function firebaseRequest(url, options = {}){
+  const response = await fetch(url,{
+    ...options,
+    headers:{
+      "Content-Type":"application/json",
+      ...(options.headers || {})
+    }
+  });
+
+  if(!response.ok){
+    throw new Error("Firebase bağlantı hatası: " + response.status);
+  }
+
+  return await response.json();
+}
+
+async function connectRoom(){
+  const room = document.getElementById("roomInput").value.trim();
+
+  if(!room){
+    showStatus("Lütfen oda kodu yaz.");
+    return;
+  }
+
+  if(poller) clearInterval(poller);
+
+  connected = false;
+  seenMessages.clear();
+  document.getElementById("chat").innerHTML = "";
+  showStatus("Bağlanılıyor...");
+
+  try{
+    await syncRoom();
+    connected = true;
+    poller = setInterval(syncRoom,1500);
+    showStatus("Bağlantı aktif! Oda: " + room);
+  }catch(error){
+    showStatus(error.message);
+  }
+}
+
+async function sendAction(){
+  if(!connected){
+    showStatus("Önce odaya bağlan.");
+    return;
+  }
+
+  const input = document.getElementById("actionInput");
+  const val = input.value.trim();
+
+  if(!val) return;
+
+  try{
+    await firebaseRequest(getRoomUrl()+"/lastAction.json",{
+      method:"PUT",
+      body:JSON.stringify({
+        nick:getNick(),
+        val:val,
+        t:Date.now()
+      })
+    });
+
+    input.value = "";
+    await syncRoom();
+    showStatus("Hareket gönderildi.");
+  }catch(error){
+    showStatus(error.message);
+  }
+}
+
+async function interactActivity(){
+  if(!connected){
+    showStatus("Önce odaya bağlan.");
+    return;
+  }
+
+  const input = document.getElementById("activityInput");
+  const val = input.value.trim();
+
+  if(!val) return;
+
+  try{
+    await firebaseRequest(getRoomUrl()+"/activity.json",{
+      method:"PUT",
+      body:JSON.stringify({
+        nick:getNick(),
+        val:val,
+        t:Date.now()
+      })
+    });
+
+    input.value = "";
+    await syncRoom();
+    showStatus("Aktivite paylaşıldı.");
+  }catch(error){
+    showStatus(error.message);
+  }
+}
+
+async function sendMsg(){
+  if(!connected){
+    showStatus("Önce odaya bağlan.");
+    return;
+  }
+
+  const input = document.getElementById("msgInput");
+  const text = input.value.trim();
+
+  if(!text) return;
+
+  try{
+    await firebaseRequest(getRoomUrl()+"/messages.json",{
+      method:"POST",
+      body:JSON.stringify({
+        nick:getNick(),
+        text:text,
+        t:Date.now()
+      })
+    });
+
+    input.value = "";
+    await syncRoom();
+  }catch(error){
+    showStatus(error.message);
+  }
+}
+
+function addMessage(id,message){
+  if(seenMessages.has(id)) return;
+
+  seenMessages.add(id);
+
+  const div = document.createElement("div");
+  div.className = "msg";
+  div.textContent = message.nick + ": " + message.text;
+
+  const chat = document.getElementById("chat");
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function syncRoom(){
+  if(syncing) return;
+
+  syncing = true;
+
+  try{
+    const data = await firebaseRequest(getRoomUrl()+".json");
+
+    if(!data){
+      syncing = false;
+      return;
+    }
+
+    if(data.lastAction){
+      document.getElementById("peerAction").textContent =
+        data.lastAction.nick + ": " + data.lastAction.val;
+    }
+
+    if(data.activity){
+      document.getElementById("sharedActivity").textContent =
+        data.activity.nick + ": " + data.activity.val;
+    }
+
+    if(data.messages){
+      const messages = Object.entries(data.messages)
+        .sort((a,b)=>(a[1].t||0)-(b[1].t||0));
+
+      messages.forEach(([id,message])=>{
+        addMessage(id,message);
+      });
+    }
+
+    if(connected){
+      showStatus("Bağlantı aktif.");
+    }
+
+  }catch(error){
+    showStatus(error.message);
+  }finally{
+    syncing = false;
+  }
+}
+</script>
+</body>
+</html>
